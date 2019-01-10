@@ -17,7 +17,6 @@
 package node
 
 import (
-	"crypto/ecdsa"
 	"reflect"
 
 	"github.com/ethereum/go-ethereum/accounts"
@@ -44,7 +43,7 @@ func (ctx *ServiceContext) OpenDatabase(name string, cache int, handles int) (et
 	if ctx.config.DataDir == "" {
 		return ethdb.NewMemDatabase(), nil
 	}
-	db, err := ethdb.NewLDBDatabase(ctx.config.resolvePath(name), cache, handles)
+	db, err := ethdb.NewLDBDatabase(ctx.config.ResolvePath(name), cache, handles)
 	if err != nil {
 		return nil, err
 	}
@@ -55,7 +54,7 @@ func (ctx *ServiceContext) OpenDatabase(name string, cache int, handles int) (et
 // and if the user actually uses persistent storage. It will return an empty string
 // for emphemeral storage and the user's own input for absolute paths.
 func (ctx *ServiceContext) ResolvePath(path string) string {
-	return ctx.config.resolvePath(path)
+	return ctx.config.ResolvePath(path)
 }
 
 // Service retrieves a currently running service registered of a specific type.
@@ -66,11 +65,6 @@ func (ctx *ServiceContext) Service(service interface{}) error {
 		return nil
 	}
 	return ErrServiceUnknown
-}
-
-// NodeKey returns node key from config
-func (ctx *ServiceContext) NodeKey() *ecdsa.PrivateKey {
-	return ctx.config.NodeKey()
 }
 
 // ServiceConstructor is the function signature of the constructors needed to be

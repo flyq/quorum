@@ -19,7 +19,6 @@ package types
 
 import (
 	"encoding/binary"
-	"fmt"
 	"io"
 	"math/big"
 	"sort"
@@ -29,8 +28,8 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
-	"github.com/ethereum/go-ethereum/crypto/sha3"
 	"github.com/ethereum/go-ethereum/rlp"
+	"golang.org/x/crypto/sha3"
 )
 
 var (
@@ -82,8 +81,8 @@ type Header struct {
 	GasUsed     uint64         `json:"gasUsed"          gencodec:"required"`
 	Time        *big.Int       `json:"timestamp"        gencodec:"required"`
 	Extra       []byte         `json:"extraData"        gencodec:"required"`
-	MixDigest   common.Hash    `json:"mixHash"          gencodec:"required"`
-	Nonce       BlockNonce     `json:"nonce"            gencodec:"required"`
+	MixDigest   common.Hash    `json:"mixHash"`
+	Nonce       BlockNonce     `json:"nonce"`
 }
 
 // field type overrides for gencodec
@@ -100,34 +99,7 @@ type headerMarshaling struct {
 // Hash returns the block hash of the header, which is simply the keccak256 hash of its
 // RLP encoding.
 func (h *Header) Hash() common.Hash {
-	// If the mix digest is equivalent to the predefined Istanbul digest, use Istanbul
-	// specific hash calculation.
-	if h.MixDigest == IstanbulDigest {
-		// Seal is reserved in extra-data. To prove block is signed by the proposer.
-		if istanbulHeader := IstanbulFilteredHeader(h, true); istanbulHeader != nil {
-			return rlpHash(istanbulHeader)
-		}
-	}
 	return rlpHash(h)
-}
-
-// HashNoNonce returns the hash which is used as input for the proof-of-work search.
-func (h *Header) HashNoNonce() common.Hash {
-	return rlpHash([]interface{}{
-		h.ParentHash,
-		h.UncleHash,
-		h.Coinbase,
-		h.Root,
-		h.TxHash,
-		h.ReceiptHash,
-		h.Bloom,
-		h.Difficulty,
-		h.Number,
-		h.GasLimit,
-		h.GasUsed,
-		h.Time,
-		h.Extra,
-	})
 }
 
 // Size returns the approximate memory used by all internal contents. It is used
@@ -137,7 +109,7 @@ func (h *Header) Size() common.StorageSize {
 }
 
 func rlpHash(x interface{}) (h common.Hash) {
-	hw := sha3.NewKeccak256()
+	hw := sha3.NewLegacyKeccak256()
 	rlp.Encode(hw, x)
 	hw.Sum(h[:0])
 	return h
@@ -168,10 +140,6 @@ type Block struct {
 	// inter-peer block relay.
 	ReceivedAt   time.Time
 	ReceivedFrom interface{}
-}
-
-func (b *Block) String() string {
-	return fmt.Sprintf("{Header: %v}", b.header)
 }
 
 // DeprecatedTd is an old relic for extracting the TD of a block. It is in the
@@ -336,10 +304,6 @@ func (b *Block) Header() *Header { return CopyHeader(b.header) }
 
 // Body returns the non-header content of the block.
 func (b *Block) Body() *Body { return &Body{b.transactions, b.uncles} }
-
-func (b *Block) HashNoNonce() common.Hash {
-	return b.header.HashNoNonce()
-}
 
 // Size returns the true RLP encoded storage size of the block, either by encoding
 // and returning it, or returning a previsouly cached value.

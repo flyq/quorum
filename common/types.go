@@ -17,6 +17,7 @@
 package common
 
 import (
+	"database/sql/driver"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -26,12 +27,14 @@ import (
 	"strings"
 
 	"github.com/ethereum/go-ethereum/common/hexutil"
-	"github.com/ethereum/go-ethereum/crypto/sha3"
+	"golang.org/x/crypto/sha3"
 )
 
 // Lengths of hashes and addresses in bytes.
 const (
-	HashLength    = 32
+	// HashLength is the expected length of the hash
+	HashLength = 32
+	// AddressLength is the expected length of the address
 	AddressLength = 20
 )
 
@@ -50,8 +53,6 @@ func BytesToHash(b []byte) Hash {
 	h.SetBytes(b)
 	return h
 }
-
-func StringToHash(s string) Hash { return BytesToHash([]byte(s)) } // dep: Istanbul
 
 // BigToHash sets byte representation of b to hash.
 // If b is larger than len(h), b will be cropped from the left.
@@ -113,10 +114,6 @@ func (h *Hash) SetBytes(b []byte) {
 	copy(h[HashLength-len(b):], b)
 }
 
-func EmptyHash(h Hash) bool {
-	return h == Hash{}
-}
-
 // Generate implements testing/quick.Generator.
 func (h Hash) Generate(rand *rand.Rand, size int) reflect.Value {
 	m := rand.Intn(len(h))
@@ -124,6 +121,24 @@ func (h Hash) Generate(rand *rand.Rand, size int) reflect.Value {
 		h[i] = byte(rand.Uint32())
 	}
 	return reflect.ValueOf(h)
+}
+
+// Scan implements Scanner for database/sql.
+func (h *Hash) Scan(src interface{}) error {
+	srcB, ok := src.([]byte)
+	if !ok {
+		return fmt.Errorf("can't scan %T into Hash", src)
+	}
+	if len(srcB) != HashLength {
+		return fmt.Errorf("can't scan []byte of len %d into Hash, want %d", len(srcB), HashLength)
+	}
+	copy(h[:], srcB)
+	return nil
+}
+
+// Value implements valuer for database/sql.
+func (h Hash) Value() (driver.Value, error) {
+	return h[:], nil
 }
 
 // UnprefixedHash allows marshaling a Hash without 0x prefix.
@@ -151,9 +166,6 @@ func BytesToAddress(b []byte) Address {
 	a.SetBytes(b)
 	return a
 }
-
-func StringToAddress(s string) Address { return BytesToAddress([]byte(s)) } // dep: Istanbul
-
 
 // BigToAddress returns Address with byte values of b.
 // If b is larger than len(h), b will be cropped from the left.
@@ -184,7 +196,7 @@ func (a Address) Hash() Hash { return BytesToHash(a[:]) }
 // Hex returns an EIP55-compliant hex string representation of the address.
 func (a Address) Hex() string {
 	unchecksummed := hex.EncodeToString(a[:])
-	sha := sha3.NewKeccak256()
+	sha := sha3.NewLegacyKeccak256()
 	sha.Write([]byte(unchecksummed))
 	hash := sha.Sum(nil)
 
@@ -236,6 +248,24 @@ func (a *Address) UnmarshalText(input []byte) error {
 // UnmarshalJSON parses a hash in hex syntax.
 func (a *Address) UnmarshalJSON(input []byte) error {
 	return hexutil.UnmarshalFixedJSON(addressT, input, a[:])
+}
+
+// Scan implements Scanner for database/sql.
+func (a *Address) Scan(src interface{}) error {
+	srcB, ok := src.([]byte)
+	if !ok {
+		return fmt.Errorf("can't scan %T into Address", src)
+	}
+	if len(srcB) != AddressLength {
+		return fmt.Errorf("can't scan []byte of len %d into Address, want %d", len(srcB), AddressLength)
+	}
+	copy(a[:], srcB)
+	return nil
+}
+
+// Value implements valuer for database/sql.
+func (a Address) Value() (driver.Value, error) {
+	return a[:], nil
 }
 
 // UnprefixedAddress allows marshaling an Address without 0x prefix.

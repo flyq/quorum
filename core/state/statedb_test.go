@@ -117,37 +117,6 @@ func TestIntermediateLeaks(t *testing.T) {
 	}
 }
 
-func TestStorageRoot(t *testing.T) {
-	var (
-		mem   = ethdb.NewMemDatabase()
-		db       = NewDatabase(mem)
-		state, _ = New(common.Hash{}, db)
-		addr     = common.Address{1}
-		key      = common.Hash{1}
-		value    = common.Hash{42}
-
-		empty = common.HexToHash("56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421")
-	)
-
-	so := state.GetOrNewStateObject(addr)
-
-	emptyRoot := so.storageRoot(db)
-	if emptyRoot != empty {
-		t.Errorf("Invalid empty storage root, expected %x, got %x", empty, emptyRoot)
-	}
-
-	// add a bit of state
-	so.SetState(db, key, value)
-	state.Commit(false)
-
-	root := so.storageRoot(db)
-	expected := common.HexToHash("63511abd258fa907afa30cb118b53744a4f49055bb3f531da512c6b866fc2ffb")
-
-	if expected != root {
-		t.Errorf("Invalid storage root, expected %x, got %x", expected, root)
-	}
-}
-
 // TestCopy tests that copying a statedb object indeed makes the original and
 // the copy independent of each other. This test is a regression test against
 // https://github.com/ethereum/go-ethereum/pull/15549.
@@ -412,11 +381,11 @@ func (test *snapshotTest) checkEqual(state, checkstate *StateDB) error {
 		checkeq("GetCodeSize", state.GetCodeSize(addr), checkstate.GetCodeSize(addr))
 		// Check storage.
 		if obj := state.getStateObject(addr); obj != nil {
-			state.ForEachStorage(addr, func(key, val common.Hash) bool {
-				return checkeq("GetState("+key.Hex()+")", val, checkstate.GetState(addr, key))
+			state.ForEachStorage(addr, func(key, value common.Hash) bool {
+				return checkeq("GetState("+key.Hex()+")", checkstate.GetState(addr, key), value)
 			})
-			checkstate.ForEachStorage(addr, func(key, checkval common.Hash) bool {
-				return checkeq("GetState("+key.Hex()+")", state.GetState(addr, key), checkval)
+			checkstate.ForEachStorage(addr, func(key, value common.Hash) bool {
+				return checkeq("GetState("+key.Hex()+")", checkstate.GetState(addr, key), value)
 			})
 		}
 		if err != nil {

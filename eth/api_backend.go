@@ -25,7 +25,6 @@ import (
 	"github.com/ethereum/go-ethereum/common/math"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/bloombits"
-	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
@@ -70,13 +69,13 @@ func (b *EthAPIBackend) HeaderByNumber(ctx context.Context, blockNr rpc.BlockNum
 	return b.eth.blockchain.GetHeaderByNumber(uint64(blockNr)), nil
 }
 
+func (b *EthAPIBackend) HeaderByHash(ctx context.Context, hash common.Hash) (*types.Header, error) {
+	return b.eth.blockchain.GetHeaderByHash(hash), nil
+}
+
 func (b *EthAPIBackend) BlockByNumber(ctx context.Context, blockNr rpc.BlockNumber) (*types.Block, error) {
 	// Pending block is only known by the miner
 	if blockNr == rpc.PendingBlockNumber {
-		if b.eth.protocolManager.raftMode {
-			// Use latest instead.
-			return b.eth.blockchain.CurrentBlock(), nil
-		}
 		block := b.eth.miner.PendingBlock()
 		return block, nil
 	}
@@ -87,28 +86,19 @@ func (b *EthAPIBackend) BlockByNumber(ctx context.Context, blockNr rpc.BlockNumb
 	return b.eth.blockchain.GetBlockByNumber(uint64(blockNr)), nil
 }
 
-func (b *EthAPIBackend) StateAndHeaderByNumber(ctx context.Context, blockNr rpc.BlockNumber) (vm.MinimalApiState, *types.Header, error) {
+func (b *EthAPIBackend) StateAndHeaderByNumber(ctx context.Context, blockNr rpc.BlockNumber) (*state.StateDB, *types.Header, error) {
 	// Pending state is only known by the miner
 	if blockNr == rpc.PendingBlockNumber {
-		if b.eth.protocolManager.raftMode {
-			// Use latest instead.
-			header, err := b.HeaderByNumber(ctx, rpc.LatestBlockNumber)
-			if header == nil || err != nil {
-				return nil, nil, err
-			}
-			publicState, privateState, err := b.eth.BlockChain().StateAt(header.Root)
-			return EthAPIState{publicState, privateState}, header, err
-		}
-		block, publicState, privateState := b.eth.miner.Pending()
-		return EthAPIState{publicState, privateState}, block.Header(), nil
+		block, state := b.eth.miner.Pending()
+		return state, block.Header(), nil
 	}
 	// Otherwise resolve the block number and return its state
 	header, err := b.HeaderByNumber(ctx, blockNr)
 	if header == nil || err != nil {
 		return nil, nil, err
 	}
-	stateDb, privateState, err := b.eth.BlockChain().StateAt(header.Root)
-	return EthAPIState{stateDb, privateState}, header, err
+	stateDb, err := b.eth.BlockChain().StateAt(header.Root)
+	return stateDb, header, err
 }
 
 func (b *EthAPIBackend) GetBlock(ctx context.Context, hash common.Hash) (*types.Block, error) {
@@ -116,18 +106,11 @@ func (b *EthAPIBackend) GetBlock(ctx context.Context, hash common.Hash) (*types.
 }
 
 func (b *EthAPIBackend) GetReceipts(ctx context.Context, hash common.Hash) (types.Receipts, error) {
-	if number := rawdb.ReadHeaderNumber(b.eth.chainDb, hash); number != nil {
-		return rawdb.ReadReceipts(b.eth.chainDb, hash, *number), nil
-	}
-	return nil, nil
+	return b.eth.blockchain.GetReceiptsByHash(hash), nil
 }
 
 func (b *EthAPIBackend) GetLogs(ctx context.Context, hash common.Hash) ([][]*types.Log, error) {
-	number := rawdb.ReadHeaderNumber(b.eth.chainDb, hash)
-	if number == nil {
-		return nil, nil
-	}
-	receipts := rawdb.ReadReceipts(b.eth.chainDb, hash, *number)
+	receipts := b.eth.blockchain.GetReceiptsByHash(hash)
 	if receipts == nil {
 		return nil, nil
 	}
@@ -142,26 +125,12 @@ func (b *EthAPIBackend) GetTd(blockHash common.Hash) *big.Int {
 	return b.eth.blockchain.GetTdByHash(blockHash)
 }
 
-func (b *EthAPIBackend) GetEVM(ctx context.Context, msg core.Message, state vm.MinimalApiState, header *types.Header, vmCfg vm.Config) (*vm.EVM, func() error, error) {
-	statedb := state.(EthAPIState)
-	from := statedb.state.GetOrNewStateObject(msg.From())
-	from.SetBalance(math.MaxBig256)
+func (b *EthAPIBackend) GetEVM(ctx context.Context, msg core.Message, state *state.StateDB, header *types.Header) (*vm.EVM, func() error, error) {
+	state.SetBalance(msg.From(), math.MaxBig256)
 	vmError := func() error { return nil }
 
 	context := core.NewEVMContext(msg, header, b.eth.BlockChain(), nil)
-
-	// Set the private state to public state if contract address is not present in the private state
-	to := common.Address{}
-	if msg.To() != nil {
-		to = *msg.To()
-	}
-
-	privateState := statedb.privateState
-	if !privateState.Exist(to) {
-		privateState = statedb.state
-	}
-
-	return vm.NewEVM(context, statedb.state, privateState, b.eth.chainConfig, vmCfg), vmError, nil
+	return vm.NewEVM(context, state, b.eth.chainConfig, *b.eth.blockchain.GetVMConfig()), vmError, nil
 }
 
 func (b *EthAPIBackend) SubscribeRemovedLogsEvent(ch chan<- core.RemovedLogsEvent) event.Subscription {
@@ -229,11 +198,7 @@ func (b *EthAPIBackend) ProtocolVersion() int {
 }
 
 func (b *EthAPIBackend) SuggestPrice(ctx context.Context) (*big.Int, error) {
-	if b.ChainConfig().IsQuorum {
-		return big.NewInt(0), nil
-	} else {
-		return b.gpo.SuggestPrice(ctx)
-	}
+	return b.gpo.SuggestPrice(ctx)
 }
 
 func (b *EthAPIBackend) ChainDb() ethdb.Database {
@@ -258,37 +223,3 @@ func (b *EthAPIBackend) ServiceFilter(ctx context.Context, session *bloombits.Ma
 		go session.Multiplex(bloomRetrievalBatch, bloomRetrievalWait, b.eth.bloomRequests)
 	}
 }
-
-type EthAPIState struct {
-	state, privateState *state.StateDB
-}
-
-func (s EthAPIState) GetBalance(addr common.Address) *big.Int {
-	if s.privateState.Exist(addr) {
-		return s.privateState.GetBalance(addr)
-	}
-	return s.state.GetBalance(addr)
-}
-
-func (s EthAPIState) GetCode(addr common.Address) []byte {
-	if s.privateState.Exist(addr) {
-		return s.privateState.GetCode(addr)
-	}
-	return s.state.GetCode(addr)
-}
-
-func (s EthAPIState) GetState(a common.Address, b common.Hash) common.Hash {
-	if s.privateState.Exist(a) {
-		return s.privateState.GetState(a, b)
-	}
-	return s.state.GetState(a, b)
-}
-
-func (s EthAPIState) GetNonce(addr common.Address) uint64 {
-	if s.privateState.Exist(addr) {
-		return s.privateState.GetNonce(addr)
-	}
-	return s.state.GetNonce(addr)
-}
-
-//func (s MinimalApiState) Error

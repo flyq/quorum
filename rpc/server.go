@@ -25,8 +25,8 @@ import (
 	"sync"
 	"sync/atomic"
 
+	mapset "github.com/deckarep/golang-set"
 	"github.com/ethereum/go-ethereum/log"
-	"gopkg.in/fatih/set.v0"
 )
 
 const MetadataApi = "rpc"
@@ -46,7 +46,7 @@ const (
 func NewServer() *Server {
 	server := &Server{
 		services: make(serviceRegistry),
-		codecs:   set.New(),
+		codecs:   mapset.NewSet(),
 		run:      1,
 	}
 
@@ -94,11 +94,12 @@ func (s *Server) RegisterName(name string, rcvr interface{}) error {
 
 	methods, subscriptions := suitableCallbacks(rcvrVal, svc.typ)
 
-	// already a previous service register under given sname, merge methods/subscriptions
+	if len(methods) == 0 && len(subscriptions) == 0 {
+		return fmt.Errorf("Service %T doesn't have any suitable methods/subscriptions to expose", rcvr)
+	}
+
+	// already a previous service register under given name, merge methods/subscriptions
 	if regsvc, present := s.services[name]; present {
-		if len(methods) == 0 && len(subscriptions) == 0 {
-			return fmt.Errorf("Service %T doesn't have any suitable methods/subscriptions to expose", rcvr)
-		}
 		for _, m := range methods {
 			regsvc.callbacks[formatName(m.method.Name)] = m
 		}
@@ -110,10 +111,6 @@ func (s *Server) RegisterName(name string, rcvr interface{}) error {
 
 	svc.name = name
 	svc.callbacks, svc.subscriptions = methods, subscriptions
-
-	if len(svc.callbacks) == 0 && len(svc.subscriptions) == 0 {
-		return fmt.Errorf("Service %T doesn't have any suitable methods/subscriptions to expose", rcvr)
-	}
 
 	s.services[svc.name] = svc
 	return nil
@@ -300,13 +297,9 @@ func (s *Server) handle(ctx context.Context, codec ServerCodec, req *serverReque
 		return codec.CreateErrorResponse(&req.id, rpcErr), nil
 	}
 
-	//Quorum
-	//Pass the request ID to the method as part of the context, in case the method needs it later
-	contextWithId := context.WithValue(ctx, "id", req.id)
-	//End-Quorum
 	arguments := []reflect.Value{req.callb.rcvr}
 	if req.callb.hasCtx {
-		arguments = append(arguments, reflect.ValueOf(contextWithId))
+		arguments = append(arguments, reflect.ValueOf(ctx))
 	}
 	if len(req.args) > 0 {
 		arguments = append(arguments, req.args...)

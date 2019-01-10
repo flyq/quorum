@@ -60,8 +60,11 @@ func (b *LesApiBackend) HeaderByNumber(ctx context.Context, blockNr rpc.BlockNum
 	if blockNr == rpc.LatestBlockNumber || blockNr == rpc.PendingBlockNumber {
 		return b.eth.blockchain.CurrentHeader(), nil
 	}
-
 	return b.eth.blockchain.GetHeaderByNumberOdr(ctx, uint64(blockNr))
+}
+
+func (b *LesApiBackend) HeaderByHash(ctx context.Context, hash common.Hash) (*types.Header, error) {
+	return b.eth.blockchain.GetHeaderByHash(hash), nil
 }
 
 func (b *LesApiBackend) BlockByNumber(ctx context.Context, blockNr rpc.BlockNumber) (*types.Block, error) {
@@ -72,7 +75,7 @@ func (b *LesApiBackend) BlockByNumber(ctx context.Context, blockNr rpc.BlockNumb
 	return b.GetBlock(ctx, header.Hash())
 }
 
-func (b *LesApiBackend) StateAndHeaderByNumber(ctx context.Context, blockNr rpc.BlockNumber) (vm.MinimalApiState, *types.Header, error) {
+func (b *LesApiBackend) StateAndHeaderByNumber(ctx context.Context, blockNr rpc.BlockNumber) (*state.StateDB, *types.Header, error) {
 	header, err := b.HeaderByNumber(ctx, blockNr)
 	if header == nil || err != nil {
 		return nil, nil, err
@@ -102,11 +105,10 @@ func (b *LesApiBackend) GetTd(hash common.Hash) *big.Int {
 	return b.eth.blockchain.GetTdByHash(hash)
 }
 
-func (b *LesApiBackend) GetEVM(ctx context.Context, msg core.Message, apiState vm.MinimalApiState, header *types.Header, vmCfg vm.Config) (*vm.EVM, func() error, error) {
-	statedb := apiState.(*state.StateDB)
-	statedb.SetBalance(msg.From(), math.MaxBig256)
+func (b *LesApiBackend) GetEVM(ctx context.Context, msg core.Message, state *state.StateDB, header *types.Header) (*vm.EVM, func() error, error) {
+	state.SetBalance(msg.From(), math.MaxBig256)
 	context := core.NewEVMContext(msg, header, b.eth.blockchain, nil)
-	return vm.NewEVM(context, statedb, statedb, b.eth.chainConfig, vmCfg), statedb.Error, nil
+	return vm.NewEVM(context, state, b.eth.chainConfig, vm.Config{}), state.Error, nil
 }
 
 func (b *LesApiBackend) SendTx(ctx context.Context, signedTx *types.Transaction) error {
@@ -190,7 +192,7 @@ func (b *LesApiBackend) BloomStatus() (uint64, uint64) {
 		return 0, 0
 	}
 	sections, _, _ := b.eth.bloomIndexer.Sections()
-	return light.BloomTrieFrequency, sections
+	return params.BloomBitsBlocksClient, sections
 }
 
 func (b *LesApiBackend) ServiceFilter(ctx context.Context, session *bloombits.MatcherSession) {

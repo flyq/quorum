@@ -25,7 +25,6 @@ import (
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
-	"github.com/ethereum/go-ethereum/private"
 )
 
 var (
@@ -36,7 +35,7 @@ var (
 The State Transitioning Model
 
 A state transition is a change made when a transaction is applied to the current world state
-The state transitioning model does all all the necessary work to work out a valid new state root.
+The state transitioning model does all the necessary work to work out a valid new state root.
 
 1) Nonce handling
 2) Pre pay gas
@@ -74,12 +73,6 @@ type Message interface {
 	Nonce() uint64
 	CheckNonce() bool
 	Data() []byte
-}
-
-// PrivateMessage implements a private message
-type PrivateMessage interface {
-	Message
-	IsPrivate() bool
 }
 
 // IntrinsicGas computes the 'intrinsic gas' for a message with the given data.
@@ -124,7 +117,7 @@ func NewStateTransition(evm *vm.EVM, msg Message, gp *GasPool) *StateTransition 
 		gasPrice: msg.GasPrice(),
 		value:    msg.Value(),
 		data:     msg.Data(),
-		state:    evm.PublicState(),
+		state:    evm.StateDB,
 	}
 }
 
@@ -135,7 +128,6 @@ func NewStateTransition(evm *vm.EVM, msg Message, gp *GasPool) *StateTransition 
 // the gas used (which includes gas refunds) and an error if it failed. An error always
 // indicates a core error meaning that the message would always fail for that particular
 // state and would never be accepted within a block.
-
 func ApplyMessage(evm *vm.EVM, msg Message, gp *GasPool) ([]byte, uint64, bool, error) {
 	return NewStateTransition(evm, msg, gp).TransitionDb()
 }
@@ -186,8 +178,8 @@ func (st *StateTransition) preCheck() error {
 }
 
 // TransitionDb will transition the state by applying the current message and
-// returning the result including the the used gas. It returns an error if it
-// failed. An error indicates a consensus issue.
+// returning the result including the used gas. It returns an error if failed.
+// An error indicates a consensus issue.
 func (st *StateTransition) TransitionDb() (ret []byte, usedGas uint64, failed bool, err error) {
 	if err = st.preCheck(); err != nil {
 		return
@@ -196,27 +188,6 @@ func (st *StateTransition) TransitionDb() (ret []byte, usedGas uint64, failed bo
 	sender := vm.AccountRef(msg.From())
 	homestead := st.evm.ChainConfig().IsHomestead(st.evm.BlockNumber)
 	contractCreation := msg.To() == nil
-	isQuorum := st.evm.ChainConfig().IsQuorum
-
-	var data []byte
-	isPrivate := false
-	publicState := st.state
-	if msg, ok := msg.(PrivateMessage); ok && isQuorum && msg.IsPrivate() {
-		isPrivate = true
-		data, err = private.P.Receive(st.data)
-		// Increment the public account nonce if:
-		// 1. Tx is private and *not* a participant of the group and either call or create
-		// 2. Tx is private we are part of the group and is a call
-		if err != nil || !contractCreation {
-			publicState.SetNonce(sender.Address(), publicState.GetNonce(sender.Address())+1)
-		}
-
-		if err != nil {
-			return nil, 0, false, nil
-		}
-	} else {
-		data = st.data
-	}
 
 	// Pay intrinsic gas
 	gas, err := IntrinsicGas(st.data, contractCreation, homestead)
@@ -235,26 +206,11 @@ func (st *StateTransition) TransitionDb() (ret []byte, usedGas uint64, failed bo
 		vmerr error
 	)
 	if contractCreation {
-		ret, _, st.gas, vmerr = evm.Create(sender, data, st.gas, st.value)
+		ret, _, st.gas, vmerr = evm.Create(sender, st.data, st.gas, st.value)
 	} else {
-		// Increment the account nonce only if the transaction isn't private.
-		// If the transaction is private it has already been incremented on
-		// the public state.
-		if !isPrivate {
-			publicState.SetNonce(msg.From(), publicState.GetNonce(sender.Address())+1)
-		}
-		var to common.Address
-		if isQuorum {
-			to = *st.msg.To()
-		} else {
-			to = st.to()
-		}
-		//if input is empty for the smart contract call, return
-		if len(data) == 0 && isPrivate {
-			return nil, 0, false, nil
-		}
-
-		ret, st.gas, vmerr = evm.Call(sender, to, data, st.gas, st.value)
+		// Increment the nonce for the next transaction
+		st.state.SetNonce(msg.From(), st.state.GetNonce(sender.Address())+1)
+		ret, st.gas, vmerr = evm.Call(sender, st.to(), st.data, st.gas, st.value)
 	}
 	if vmerr != nil {
 		log.Debug("VM returned with error", "err", vmerr)
@@ -268,9 +224,6 @@ func (st *StateTransition) TransitionDb() (ret []byte, usedGas uint64, failed bo
 	st.refundGas()
 	st.state.AddBalance(st.evm.Coinbase, new(big.Int).Mul(new(big.Int).SetUint64(st.gasUsed()), st.gasPrice))
 
-	if isPrivate {
-		return ret, 0, vmerr != nil, err
-	}
 	return ret, st.gasUsed(), vmerr != nil, err
 }
 

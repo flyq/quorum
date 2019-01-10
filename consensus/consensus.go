@@ -23,7 +23,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rpc"
 )
@@ -87,9 +86,15 @@ type Engine interface {
 	Finalize(chain ChainReader, header *types.Header, state *state.StateDB, txs []*types.Transaction,
 		uncles []*types.Header, receipts []*types.Receipt) (*types.Block, error)
 
-	// Seal generates a new block for the given input block with the local miner's
-	// seal place on top.
-	Seal(chain ChainReader, block *types.Block, stop <-chan struct{}) (*types.Block, error)
+	// Seal generates a new sealing request for the given input block and pushes
+	// the result into the given channel.
+	//
+	// Note, the method returns immediately and will send the result async. More
+	// than one result may also be returned depending on the consensus algorithm.
+	Seal(chain ChainReader, block *types.Block, results chan<- *types.Block, stop <-chan struct{}) error
+
+	// SealHash returns the hash of a block prior to it being sealed.
+	SealHash(header *types.Header) common.Hash
 
 	// CalcDifficulty is the difficulty adjustment algorithm. It returns the difficulty
 	// that a new block should have.
@@ -98,20 +103,8 @@ type Engine interface {
 	// APIs returns the RPC APIs this consensus engine provides.
 	APIs(chain ChainReader) []rpc.API
 
-	// Protocol returns the protocol for this consensus
-	Protocol() Protocol
-}
-
-// Handler should be implemented is the consensus needs to handle and send peer's message
-type Handler interface {
-	// NewChainHead handles a new head block comes
-	NewChainHead() error
-
-	// HandleMsg handles a message from peer
-	HandleMsg(address common.Address, data p2p.Msg) (bool, error)
-
-	// SetBroadcaster sets the broadcaster to send message to peers
-	SetBroadcaster(Broadcaster)
+	// Close terminates any background threads maintained by the consensus engine.
+	Close() error
 }
 
 // PoW is a consensus engine based on proof-of-work.
@@ -120,15 +113,4 @@ type PoW interface {
 
 	// Hashrate returns the current mining hashrate of a PoW consensus engine.
 	Hashrate() float64
-}
-
-// Istanbul is a consensus engine to avoid byzantine failure
-type Istanbul interface {
-	Engine
-
-	// Start starts the engine
-	Start(chain ChainReader, currentBlock func() *types.Block, hasBadBlock func(hash common.Hash) bool) error
-
-	// Stop stops the engine
-	Stop() error
 }

@@ -151,6 +151,9 @@ func (e *GenesisMismatchError) Error() string {
 //
 // The returned chain configuration is never nil.
 func SetupGenesisBlock(db ethdb.Database, genesis *Genesis) (*params.ChainConfig, common.Hash, error) {
+	return SetupGenesisBlockWithOverride(db, genesis, nil)
+}
+func SetupGenesisBlockWithOverride(db ethdb.Database, genesis *Genesis, constantinopleOverride *big.Int) (*params.ChainConfig, common.Hash, error) {
 	if genesis != nil && genesis.Config == nil {
 		return params.AllEthashProtocolChanges, common.Hash{}, errGenesisNoConfig
 	}
@@ -178,6 +181,9 @@ func SetupGenesisBlock(db ethdb.Database, genesis *Genesis) (*params.ChainConfig
 
 	// Get the existing chain configuration.
 	newcfg := genesis.configOrDefault(stored)
+	if constantinopleOverride != nil {
+		newcfg.ConstantinopleBlock = constantinopleOverride
+	}
 	storedcfg := rawdb.ReadChainConfig(db, stored)
 	if storedcfg == nil {
 		log.Warn("Found genesis block without chain config")
@@ -197,7 +203,7 @@ func SetupGenesisBlock(db ethdb.Database, genesis *Genesis) (*params.ChainConfig
 	if height == nil {
 		return newcfg, stored, fmt.Errorf("missing block number for head header hash")
 	}
-	compatErr := storedcfg.CheckCompatible(newcfg, *height, GetIsQuorumEIP155Activated(db))
+	compatErr := storedcfg.CheckCompatible(newcfg, *height)
 	if compatErr != nil && *height != 0 && compatErr.RewindTo != 0 {
 		return newcfg, stored, compatErr
 	}
@@ -333,19 +339,6 @@ func DefaultRinkebyGenesisBlock() *Genesis {
 	}
 }
 
-// DefaultOttomanGenesisBlock returns the Ottoman network genesis block.
-func DefaultOttomanGenesisBlock() *Genesis {
-	return &Genesis{
-		Config:     params.OttomanChainConfig,
-		Timestamp:  1496993285,
-		ExtraData:  hexutil.MustDecode("0x0000000000000000000000000000000000000000000000000000000000000000f89af85494475cc98b5521ab2a1335683e7567c8048bfe79ed9407d8299de61faed3686ba4c4e6c3b9083d7e2371944fe035ce99af680d89e2c4d73aca01dbfc1bd2fd94dc421209441a754f79c4a4ecd2b49c935aad0312b8410000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000c0"),
-		GasLimit:   4700000,
-		Difficulty: big.NewInt(1),
-		Mixhash:    common.HexToHash("0x63746963616c2062797a616e74696e65206661756c7420746f6c6572616e6365"),
-		Alloc:      decodePrealloc(ottomanAllocData),
-	}
-}
-
 // DeveloperGenesisBlock returns the 'geth --dev' genesis block. Note, this must
 // be seeded with the
 func DeveloperGenesisBlock(period uint64, faucet common.Address) *Genesis {
@@ -368,7 +361,7 @@ func DeveloperGenesisBlock(period uint64, faucet common.Address) *Genesis {
 			common.BytesToAddress([]byte{6}): {Balance: big.NewInt(1)}, // ECAdd
 			common.BytesToAddress([]byte{7}): {Balance: big.NewInt(1)}, // ECScalarMul
 			common.BytesToAddress([]byte{8}): {Balance: big.NewInt(1)}, // ECPairing
-			faucet: {Balance: new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(9))},
+			faucet:                           {Balance: new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(9))},
 		},
 	}
 }

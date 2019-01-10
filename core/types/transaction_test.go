@@ -49,18 +49,6 @@ var (
 		HomesteadSigner{},
 		common.Hex2Bytes("98ff921201554726367d2be8c804a7ff89ccf285ebc57dff8ae4c44b9c19ac4a8887321be575c8095f789dd4c743dfe42c1820f9231f98a962b210e3ac2452a301"),
 	)
-
-	rightvrsTx2, _ = NewTransaction(
-		3,
-		common.HexToAddress("b94f5374fce5edbc8e2a8697c15331677e6ebf0b"),
-		big.NewInt(10),
-		2000,
-		big.NewInt(0),
-		common.FromHex("5544"),
-	).WithSignature(
-		HomesteadSigner{},
-		common.Hex2Bytes("98ff921201554726367d2be8c804a7ff89ccf285ebc57dff8ae4c44b9c19ac4a8887321be575c8095f789dd4c743dfe42c1820f9231f98a962b210e3ac2452a301"),
-	)
 )
 
 func TestTransactionSigHash(t *testing.T) {
@@ -79,18 +67,6 @@ func TestTransactionEncode(t *testing.T) {
 		t.Fatalf("encode error: %v", err)
 	}
 	should := common.FromHex("f86103018207d094b94f5374fce5edbc8e2a8697c15331677e6ebf0b0a8255441ca098ff921201554726367d2be8c804a7ff89ccf285ebc57dff8ae4c44b9c19ac4aa08887321be575c8095f789dd4c743dfe42c1820f9231f98a962b210e3ac2452a3")
-	if !bytes.Equal(txb, should) {
-		t.Errorf("encoded RLP mismatch, got %x", txb)
-	}
-}
-
-// Test from the original quorum implementation
-func TestTransactionEncode2(t *testing.T) {
-	txb, err := rlp.EncodeToBytes(rightvrsTx2)
-	if err != nil {
-		t.Fatalf("encode error: %v", err)
-	}
-	should := common.FromHex("f86103808207d094b94f5374fce5edbc8e2a8697c15331677e6ebf0b0a8255441ca098ff921201554726367d2be8c804a7ff89ccf285ebc57dff8ae4c44b9c19ac4aa08887321be575c8095f789dd4c743dfe42c1820f9231f98a962b210e3ac2452a3")
 	if !bytes.Equal(txb, should) {
 		t.Errorf("encoded RLP mismatch, got %x", txb)
 	}
@@ -209,6 +185,7 @@ func TestTransactionJSON(t *testing.T) {
 	}
 	signer := NewEIP155Signer(common.Big1)
 
+	transactions := make([]*Transaction, 0, 50)
 	for i := uint64(0); i < 25; i++ {
 		var tx *Transaction
 		switch i % 2 {
@@ -217,20 +194,25 @@ func TestTransactionJSON(t *testing.T) {
 		case 1:
 			tx = NewContractCreation(i, common.Big0, 1, common.Big2, []byte("abcdef"))
 		}
+		transactions = append(transactions, tx)
 
-		tx, err := SignTx(tx, signer, key)
+		signedTx, err := SignTx(tx, signer, key)
 		if err != nil {
 			t.Fatalf("could not sign transaction: %v", err)
 		}
 
+		transactions = append(transactions, signedTx)
+	}
+
+	for _, tx := range transactions {
 		data, err := json.Marshal(tx)
 		if err != nil {
-			t.Errorf("json.Marshal failed: %v", err)
+			t.Fatalf("json.Marshal failed: %v", err)
 		}
 
 		var parsedTx *Transaction
 		if err := json.Unmarshal(data, &parsedTx); err != nil {
-			t.Errorf("json.Unmarshal failed: %v", err)
+			t.Fatalf("json.Unmarshal failed: %v", err)
 		}
 
 		// compare nonce, price, gaslimit, recipient, amount, payload, V, R, S

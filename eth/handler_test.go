@@ -17,6 +17,7 @@
 package eth
 
 import (
+	"fmt"
 	"math"
 	"math/big"
 	"math/rand"
@@ -24,7 +25,6 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/ethash"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/state"
@@ -38,8 +38,6 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 )
 
-var bigTxGas = new(big.Int).SetUint64(params.TxGas)
-
 // Tests that protocol versions and modes of operations are matched up properly.
 func TestProtocolCompatibility(t *testing.T) {
 	// Define the compatibility chart
@@ -52,12 +50,12 @@ func TestProtocolCompatibility(t *testing.T) {
 		{61, downloader.FastSync, false}, {62, downloader.FastSync, false}, {63, downloader.FastSync, true},
 	}
 	// Make sure anything we screw up is restored
-	backup := consensus.EthProtocol.Versions
-	defer func() { consensus.EthProtocol.Versions = backup }()
+	backup := ProtocolVersions
+	defer func() { ProtocolVersions = backup }()
 
 	// Try all available compatibility configs and check for errors
 	for i, tt := range tests {
-		consensus.EthProtocol.Versions = []uint{tt.version}
+		ProtocolVersions = []uint{tt.version}
 
 		pm, _, err := newTestProtocolManager(tt.mode, 0, nil, nil)
 		if pm != nil {
@@ -245,10 +243,10 @@ func testGetBlockBodies(t *testing.T, protocol int) {
 		available []bool        // Availability of explicitly requested blocks
 		expected  int           // Total number of existing blocks to expect
 	}{
-		{1, nil, nil, 1},                                                         // A single random block should be retrievable
-		{10, nil, nil, 10},                                                       // Multiple random blocks should be retrievable
-		{limit, nil, nil, limit},                                                 // The maximum possible blocks should be retrievable
-		{limit + 1, nil, nil, limit},                                             // No more than the possible block count should be returned
+		{1, nil, nil, 1},             // A single random block should be retrievable
+		{10, nil, nil, 10},           // Multiple random blocks should be retrievable
+		{limit, nil, nil, limit},     // The maximum possible blocks should be retrievable
+		{limit + 1, nil, nil, limit}, // No more than the possible block count should be returned
 		{0, []common.Hash{pm.blockchain.Genesis().Hash()}, []bool{true}, 1},      // The genesis block should be retrievable
 		{0, []common.Hash{pm.blockchain.CurrentBlock().Hash()}, []bool{true}, 1}, // The chains head block should be retrievable
 		{0, []common.Hash{{}}, []bool{false}, 0},                                 // A non existent block should not be returned
@@ -378,7 +376,7 @@ func testGetNodeData(t *testing.T, protocol int) {
 		trie, _ := state.New(pm.blockchain.GetBlockByNumber(i).Root(), state.NewDatabase(statedb))
 
 		for j, acc := range accounts {
-			state, _, _ := pm.blockchain.State()
+			state, _ := pm.blockchain.State()
 			bw := state.GetBalance(acc)
 			bh := trie.GetBalance(acc)
 
@@ -469,15 +467,18 @@ func testDAOChallenge(t *testing.T, localForked, remoteForked bool, timeout bool
 	}
 	// Create a DAO aware protocol manager
 	var (
-		evmux         = new(event.TypeMux)
-		pow           = ethash.NewFaker()
-		db            = ethdb.NewMemDatabase()
-		config        = &params.ChainConfig{DAOForkBlock: big.NewInt(1), DAOForkSupport: localForked}
-		gspec         = &core.Genesis{Config: config}
-		genesis       = gspec.MustCommit(db)
-		blockchain, _ = core.NewBlockChain(db, nil, config, pow, vm.Config{})
+		evmux   = new(event.TypeMux)
+		pow     = ethash.NewFaker()
+		db      = ethdb.NewMemDatabase()
+		config  = &params.ChainConfig{DAOForkBlock: big.NewInt(1), DAOForkSupport: localForked}
+		gspec   = &core.Genesis{Config: config}
+		genesis = gspec.MustCommit(db)
 	)
-	pm, err := NewProtocolManager(config, downloader.FullSync, DefaultConfig.NetworkId, evmux, new(testTxPool), pow, blockchain, db, false)
+	blockchain, err := core.NewBlockChain(db, nil, config, pow, vm.Config{}, nil)
+	if err != nil {
+		t.Fatalf("failed to create new blockchain: %v", err)
+	}
+	pm, err := NewProtocolManager(config, downloader.FullSync, DefaultConfig.NetworkId, evmux, new(testTxPool), pow, blockchain, db, nil)
 	if err != nil {
 		t.Fatalf("failed to start test protocol manager: %v", err)
 	}
@@ -485,7 +486,7 @@ func testDAOChallenge(t *testing.T, localForked, remoteForked bool, timeout bool
 	defer pm.Stop()
 
 	// Connect a new peer and check that we receive the DAO challenge
-	peer, _ := newTestPeer("peer", consensus.Eth63, pm, true)
+	peer, _ := newTestPeer("peer", eth63, pm, true)
 	defer peer.close()
 
 	challenge := &getBlockHeadersData{
@@ -521,5 +522,92 @@ func testDAOChallenge(t *testing.T, localForked, remoteForked bool, timeout bool
 		if peers := pm.peers.Len(); peers != 0 {
 			t.Fatalf("peer count mismatch: have %d, want %d", peers, 0)
 		}
+	}
+}
+
+func TestBroadcastBlock(t *testing.T) {
+	var tests = []struct {
+		totalPeers        int
+		broadcastExpected int
+	}{
+		{1, 1},
+		{2, 2},
+		{3, 3},
+		{4, 4},
+		{5, 4},
+		{9, 4},
+		{12, 4},
+		{16, 4},
+		{26, 5},
+		{100, 10},
+	}
+	for _, test := range tests {
+		testBroadcastBlock(t, test.totalPeers, test.broadcastExpected)
+	}
+}
+
+func testBroadcastBlock(t *testing.T, totalPeers, broadcastExpected int) {
+	var (
+		evmux   = new(event.TypeMux)
+		pow     = ethash.NewFaker()
+		db      = ethdb.NewMemDatabase()
+		config  = &params.ChainConfig{}
+		gspec   = &core.Genesis{Config: config}
+		genesis = gspec.MustCommit(db)
+	)
+	blockchain, err := core.NewBlockChain(db, nil, config, pow, vm.Config{}, nil)
+	if err != nil {
+		t.Fatalf("failed to create new blockchain: %v", err)
+	}
+	pm, err := NewProtocolManager(config, downloader.FullSync, DefaultConfig.NetworkId, evmux, new(testTxPool), pow, blockchain, db, nil)
+	if err != nil {
+		t.Fatalf("failed to start test protocol manager: %v", err)
+	}
+	pm.Start(1000)
+	defer pm.Stop()
+	var peers []*testPeer
+	for i := 0; i < totalPeers; i++ {
+		peer, _ := newTestPeer(fmt.Sprintf("peer %d", i), eth63, pm, true)
+		defer peer.close()
+		peers = append(peers, peer)
+	}
+	chain, _ := core.GenerateChain(gspec.Config, genesis, ethash.NewFaker(), db, 1, func(i int, gen *core.BlockGen) {})
+	pm.BroadcastBlock(chain[0], true /*propagate*/)
+
+	errCh := make(chan error, totalPeers)
+	doneCh := make(chan struct{}, totalPeers)
+	for _, peer := range peers {
+		go func(p *testPeer) {
+			if err := p2p.ExpectMsg(p.app, NewBlockMsg, &newBlockData{Block: chain[0], TD: big.NewInt(131136)}); err != nil {
+				errCh <- err
+			} else {
+				doneCh <- struct{}{}
+			}
+		}(peer)
+	}
+	timeout := time.After(300 * time.Millisecond)
+	var receivedCount int
+outer:
+	for {
+		select {
+		case err = <-errCh:
+			break outer
+		case <-doneCh:
+			receivedCount++
+			if receivedCount == totalPeers {
+				break outer
+			}
+		case <-timeout:
+			break outer
+		}
+	}
+	for _, peer := range peers {
+		peer.app.Close()
+	}
+	if err != nil {
+		t.Errorf("error matching block by peer: %v", err)
+	}
+	if receivedCount != broadcastExpected {
+		t.Errorf("block broadcast to %d peers, expected %d", receivedCount, broadcastExpected)
 	}
 }
